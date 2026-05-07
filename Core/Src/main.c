@@ -132,6 +132,7 @@ int main(void)
   TxData[0] = 1;
   TxData[7] = 0xFF;
   
+  HAL_Delay(50);
   MLX90640_SetRefreshRate(MLX90640_ADDR, RefreshRate);
 	MLX90640_SetChessMode(MLX90640_ADDR);
   // MLX90640_SetInterleavedMode(MLX90640_ADDR);
@@ -142,6 +143,7 @@ int main(void)
   if (status != 0) printf("\r\nParameter extraction failed with error code:%d\r\n",status);
 
   int lastSubpage = -1;
+  int frameValid = 1;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -157,7 +159,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    int status = MLX90640_GetFrameData(MLX90640_ADDR, frame);
+
+    status = MLX90640_GetFrameData(MLX90640_ADDR, frame);
     if (status < 0) {
         printf("GetFrame Error: %d\r\n", status);
         continue;
@@ -165,21 +168,67 @@ int main(void)
 
     int curSubpage = frame[833];
     float Ta = MLX90640_GetTa(frame, &mlx90640);
+    // Ta -= 7.0f;
+    float vdd = MLX90640_GetVdd(frame, &mlx90640);
+    // printf("Vdd: %d\r\n", (int)vdd);
     float tr = Ta - TA_SHIFT;
+    // printf("Ta=%.2d Tr=%.2d\r\n", (int)Ta, (int)tr);
 
     // 每次都呼叫 CalculateTo，讓兩個 subpage 分別填入各自的 384 個 pixel
     MLX90640_CalculateTo(frame, &mlx90640, emissivity, tr, mlx90640To);
+    MLX90640_BadPixelsCorrection(&mlx90640.brokenPixels, mlx90640To, 1, &mlx90640);
+    MLX90640_BadPixelsCorrection(&mlx90640.outlierPixels, mlx90640To, 1, &mlx90640);
 
     // 等到 subpage 0 和 1 都收到（一個完整循環），才印出完整畫面
     if (curSubpage == 1 && lastSubpage == 0)
     {
-        printf("Ta=%.2d Tr=%.2d\r\n", (int)Ta, (int)tr);
-        printf("==============================================\r\n");
+        // printf("0\n");
+        // printf("==============================================\r\n");
+        // for (int i = 0; i < 768; i++) {
+        //     if (i % 32 == 0 && i != 0) printf("\r\n");
+        //     printf("%.2d ", (int)mlx90640To[i]);
+        // }
+        // printf("\n1\n");
+        // printf("\r\n==============================================\r\n");
+
+        frameValid = 1;
         for (int i = 0; i < 768; i++) {
-            if (i % 32 == 0 && i != 0) printf("\r\n");
-            printf("%.2d ", (int)mlx90640To[i]);
+
+            float temp = mlx90640To[i];
+
+            // NaN 檢查
+            if (isnan(temp)) {
+                frameValid = 0;
+                printf("ERROR: NAN at pixel %d\r\n", i);
+                break;
+            }
+          
+            // 溫度範圍檢查
+            if (temp < 1.0f || temp > 100.0f) {
+                frameValid = 0;
+                printf("ERROR: Invalid Temp %.2f at pixel %d\r\n", temp, i);
+                break;
+            }
         }
-        printf("\r\n==============================================\r\n");
+
+// =========================
+// frame 正常才送出
+// =========================
+
+      if (frameValid) {
+      
+          printf("0\n");
+      
+          for (int i = 0; i < 768; i++) {
+          
+              if (i % 32 == 0 && i != 0)
+                  printf("\r\n");
+          
+              printf("%.2d ", (int)mlx90640To[i]);
+          }
+        
+          printf("\n1\n");
+      }
     }
     lastSubpage = curSubpage;
 		// MLX90640_CalculateTo(frame, &mlx90640, emissivity , tr, mlx90640To);

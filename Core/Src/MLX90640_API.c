@@ -556,7 +556,7 @@ float MLX90640_GetTa(uint16_t *frameData, const paramsMLX90640 *params)
     }
     ptatArt = (ptat / (ptat * params->alphaPTAT + ptatArt)) * pow(2, (double)18);
     
-    ta = (ptatArt / (1 + params->KvPTAT * (vdd - 3.3f)) - params->vPTAT25);
+    ta = (ptatArt / (1 + params->KvPTAT * (vdd - 3.0f)) - params->vPTAT25);
     ta = ta / params->KtPTAT + 25;
     
     return ta;
