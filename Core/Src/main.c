@@ -60,7 +60,7 @@
 #define  FPS32HZ  0x06
 
 #define  MLX90640_ADDR 0x33
-#define	 RefreshRate FPS4HZ 
+#define	 RefreshRate FPS16HZ 
 #define  TA_SHIFT 8 //Default shift for MLX90640 in open air
 
 static uint16_t eeMLX90640[832];  
@@ -76,6 +76,7 @@ uint8_t               RxData[8]; /* Buffer of the received data */
 uint32_t              TxMailbox;  /* The number of the mail box that transmitted the Tx message */
 CAN_RxHeaderTypeDef   RxHeaderFIFO0;   /* Header containing the information of the received frame */
 uint8_t               RxDataFIFO0[8];  /* Buffer of the received data */
+uint8_t               Mode;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -144,6 +145,8 @@ int main(void)
 
   int lastSubpage = -1;
   int frameValid = 1;
+
+  Mode = 3;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -158,31 +161,16 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-
     status = MLX90640_GetFrameData(MLX90640_ADDR, frame);
     if (status < 0) {
         printf("GetFrame Error: %d\r\n", status);
         continue;
     }
 
-    // printf("\r\n");
-    // printf("frame[776]=%d frame[778]=%d frame[800]=%d frame[808]=%d frame[810]=%d\r\n",
-    //     (int16_t)frame[776], (int16_t)frame[778],
-    //     (int16_t)frame[800], (int16_t)frame[808], (int16_t)frame[810]);
-    // printf("frame[832]=0x%04X frame[833]=%d\r\n", frame[832], frame[833]);
-    // printf("eeMLX90640[48]=%d eeMLX90640[49]=%d eeMLX90640[50]=%d\r\n",
-    //     eeMLX90640[48], eeMLX90640[49], eeMLX90640[50]);
-    // printf("eeMLX90640[51]=%d eeMLX90640[56]=%d eeMLX90640[60]=%d\r\n",
-    //     eeMLX90640[51], eeMLX90640[56], eeMLX90640[60]);
-
     int curSubpage = frame[833];
     float Ta = MLX90640_GetTa(frame, &mlx90640);
-    // Ta -= 7.0f;
     float vdd = MLX90640_GetVdd(frame, &mlx90640);
-    // printf("Vdd: %d\r\n", (int)(vdd * 10));
     float tr = Ta - TA_SHIFT;
-    // printf("Ta=%.2d Tr=%.2d\r\n", (int)Ta, (int)tr);
 
     // 每次都呼叫 CalculateTo，讓兩個 subpage 分別填入各自的 384 個 pixel
     MLX90640_CalculateTo(frame, &mlx90640, emissivity, tr, mlx90640To);
@@ -192,75 +180,146 @@ int main(void)
     // 等到 subpage 0 和 1 都收到（一個完整循環），才印出完整畫面
     if (curSubpage == 1 && lastSubpage == 0)
     {
-        // printf("0\n");
-        // printf("==============================================\r\n");
-        // for (int i = 0; i < 768; i++) {
-        //     if (i % 32 == 0 && i != 0) printf("\r\n");
-        //     printf("%.2d ", (int)mlx90640To[i]);
-        // }
-        // printf("\n1\n");
-        // printf("\r\n==============================================\r\n");
+      frameValid = 1;
+      for (int i = 0; i < 768; i++)
+      {
+        float temp = mlx90640To[i];
 
-        frameValid = 1;
-        for (int i = 0; i < 768; i++) {
-
-            float temp = mlx90640To[i];
-
-            // NaN 檢查
-            if (isnan(temp)) {
-                frameValid = 0;
-                printf("ERROR: NAN at pixel %d\r\n", i);
-                break;
-            }
-          
-            // 溫度範圍檢查
-            if (temp < 1.0f || temp > 100.0f) {
-                frameValid = 0;
-                printf("ERROR: Invalid Temp %.2f at pixel %d\r\n", temp, i);
-                break;
-            }
+        // NaN 檢查
+        if (isnan(temp))
+        {
+          frameValid = 0;
+          printf("ERROR: NAN at pixel %d\r\n", i);
+          break;
         }
+      
+        // 溫度範圍檢查
+        if (temp < 1.0f || temp > 100.0f)
+        {
+          frameValid = 0;
+          printf("ERROR: Invalid Temp %.2f at pixel %d\r\n", temp, i);
+          break;
+        }
+      }
 
-      if (frameValid) {
-      
-          printf("0\n");
-      
-          for (int i = 0; i < 768; i++) {
-          
-              if (i % 32 == 0 && i != 0)
-                  printf("\r\n");
-          
-              printf("%.2d ", (int)mlx90640To[i]);
+      if (frameValid)
+      {
+        // 計算每一個直行的平均
+        uint8_t column_avg[32];
+        for(int col = 0; col < 32; col++)
+        {
+          float sum = 0.0f;
+        
+          for(int row = 0; row < 24; row++)
+          {
+              int index = row * 32 + col;
+              sum += mlx90640To[index];
           }
         
-          printf("\n1\n");
+          float avg = sum / 24;
+        
+          column_avg[col] = (uint8_t)(avg * 2);
+        }
+        // printf("0\n");
+        // for (int i = 0; i < 768; i++)
+        // {
+        //   if (i % 32 == 0 && i != 0)
+        //     printf("\r\n");
+        
+        //   printf("%.2d ", (int)mlx90640To[i]);
+        // }
+        
+        // printf("\n1\n");
+
+        int frame_index = 0;
+        
+
+        if(Mode == 1) // Reduced Mode
+        {
+          TxHeader.StdId = 0x594;
+
+          int number = 0;
+          for(int col = 0 ; col < 32; col++)
+          {
+            float sum = 0.0f;
+            for(int i = col; i < col + 4; i++)
+              sum += column_avg[i]; 
+            sum /= 4;
+            col += 3;
+            TxData[number] = (uint8_t)(sum);
+            number++;
+          }
+
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, SET);
+            while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0); /* Wait till a Tx mailbox is free. Using while loop instead of HAL_Delay() */
+            if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
+            {
+              /* Transmission request Error */
+              Error_Handler();
+            }
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, RESET);
+        }
+        else if(Mode == 3) // Full Range
+        {
+          TxHeader.StdId = 0x694;
+        
+          // printf("subpage=%d\n", frame[833]);
+          for(int i = 0; i < 768;)
+          {  
+            TxData[0] = frame_index;
+            for(int j = 1; j < 8; j++)
+            {
+              if(i < 768)
+                  TxData[j] = (uint8_t)(mlx90640To[i++] * 2);
+              else
+                  TxData[j] = 0;
+            }
+          
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, SET);
+            while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0); /* Wait till a Tx mailbox is free. Using while loop instead of HAL_Delay() */
+            if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
+            {
+              /* Transmission request Error */
+              Error_Handler();
+            }
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, RESET);
+            frame_index += 1;
+          }
+        }
+        else if(Mode == 2) // Average Line
+        {
+          TxHeader.StdId = 0x598;
+          frame_index = 0;
+          for(int i = 0; i < 32;)
+          {
+              TxData[0] = frame_index;
+          
+              for(int j = 1; j < 8; j++)
+              {
+                if(i < 32)
+                {
+                    TxData[j] = (uint8_t)(column_avg[i++]);
+                }
+                else
+                {
+                    TxData[j] = 0;
+                }
+              }
+            
+              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, SET);
+              while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0);
+            
+              if(HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
+              {
+                Error_Handler();
+              }
+              HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, RESET);
+              frame_index += 1;
+          }
+        }
       }
     }
     lastSubpage = curSubpage;
-
-    // TxHeader.StdId = 0x610;
-    // int frame_index = 0;
-    // printf("subpage=%d\n", frame[833]);
-    // for(int i = 0; i < 768;)
-    // {
-      
-    //   TxData[0] = frame_index;
-    //   for(int j = 1; j < 8; j++)
-    //   {
-    //       if(i < 768)
-    //           TxData[j] = (uint8_t)mlx90640To[i++];
-    //       else
-    //           TxData[j] = 0;
-    //   }
-
-    //   while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0); /* Wait till a Tx mailbox is free. Using while loop instead of HAL_Delay() */
-    //   if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
-    //   {
-    //     /* Transmission request Error */
-    //     Error_Handler();
-    //   }
-    //   frame_index += 7;
-    // }
   }
   /* USER CODE END 3 */
 }
@@ -318,6 +377,29 @@ PUTCHAR_PROTOTYPE
 int _write(int file, char *ptr, int len) {
     HAL_UART_Transmit(&huart1, (uint8_t*)ptr, len, HAL_MAX_DELAY);
     return len;
+}
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *CanHandle)
+{
+  
+  /* Get RX message */
+  if (HAL_CAN_GetRxMessage(CanHandle, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK)
+  {
+    
+    /* Reception Error */
+    Error_Handler();
+  }
+  if (RxHeader.StdId == 0x590) //從0x590收資料
+  {
+    // printf("Get Data\n");
+    Mode = RxData[0];  // Byte 1 = Accel (1%/LSB)
+    // uint8_t brake = RxData[5];  // Byte 4 = Brake (1%/LSB)
+    // Car_Brake = (brake) / 5;
+    // Car_Acc = (accel) / 5;
+
+    // printf("MODE: %d%%\r\n", Mode);
+    // printf("Brake: %d%%\r\n", brake);
+  }
 }
 
 /* USER CODE END 4 */
